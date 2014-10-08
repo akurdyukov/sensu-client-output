@@ -12,9 +12,10 @@ import org.json.simple.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.DataOutputStream;
 import java.io.IOException;
-import java.net.Socket;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.util.List;
 
 /**
@@ -31,10 +32,11 @@ public class SensuClientOutput implements MessageOutput {
     private final static int STATUS_WARNING = 1;
     private final static int STATUS_CRITICAL = 2;
 
-    private Socket socket;
-    private DataOutputStream out;
+    private DatagramSocket socket;
+    private InetAddress ipAddress;
     private String checkName;
     private boolean needNewAlertEveryLine;
+    private boolean isRunning;
 
     @Override
     public void initialize(Configuration configuration) throws MessageOutputConfigurationException {
@@ -43,63 +45,36 @@ public class SensuClientOutput implements MessageOutput {
         }
         checkName = configuration.getString(CK_CHECK_NAME);
         needNewAlertEveryLine = configuration.getBoolean(CK_NEW_ALERT_EVERY_LINE);
+        LOG.info("Starting Sensu output check name '{}' new alerts {}", checkName, needNewAlertEveryLine);
 
-        // open TCP socket
         try {
-            openSocket();
+            socket = new DatagramSocket();
+            ipAddress = InetAddress.getByName("localhost");
         } catch (IOException e) {
-            throw new MessageOutputConfigurationException("Cannot connect to local Sensu client");
+            LOG.error("Problems starting output", e);
+            throw new MessageOutputConfigurationException("Cannot start Sensu output");
         }
-    }
-
-    private void openSocket() throws IOException {
-        try {
-            socket = new Socket("localhost", 3030);
-            out = new DataOutputStream(socket.getOutputStream());
-        } catch (IOException e) {
-            LOG.error("Cannot connect to local Sensu client", e);
-
-            if (socket != null) {
-                try {
-                    socket.close();
-                } catch (IOException e1) {
-                    // just ignore it
-                }
-                socket = null;
-            }
-
-            throw e;
-        }
-    }
-
-    private void closeSocket() {
-        try {
-            out.close();
-            socket.close();
-        } catch (IOException e) {
-            LOG.error("Error stopping Sensu output stream", e);
-        } finally {
-            out = null;
-            socket = null;
-        }
+        isRunning = true;
     }
 
     @Override
     public void stop() {
-        // close TCP socket
-        closeSocket();
+        if (socket != null) {
+            socket.close();
+        }
+        isRunning = false;
     }
 
     @Override
     public boolean isRunning() {
-        return out != null;
+        return isRunning;
     }
 
     @Override
     public void write(Message message) throws Exception {
         String name = needNewAlertEveryLine ? checkName + message.getId() : checkName;
 
-        int level = message.getFieldAs(Integer.class, "level");
+        long level = message.getFieldAs(Long.class, "level");
         int status = STATUS_OK;
         if (level < 4)
             status = STATUS_WARNING;
@@ -113,14 +88,9 @@ public class SensuClientOutput implements MessageOutput {
         json.put("output", output);
         json.put("status", status);
 
-        try {
-            out.writeUTF(json.toString());
-        } catch (IOException e) {
-            LOG.warn("Error sending message {}", json.toString(), e);
-            // something is wrong with socket - reopen it
-            closeSocket();
-            openSocket();
-        }
+        byte[] data = json.toString().getBytes("UTF-8");
+        DatagramPacket packet = new DatagramPacket(data, data.length, ipAddress, 3030);
+        socket.send(packet);
     }
 
     @Override
