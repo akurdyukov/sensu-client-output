@@ -1,8 +1,10 @@
 package org.kurdyukov.sensu;
 
+import java.util.Arrays;
 import java.util.Collection;
 import com.google.common.collect.Lists;
 import org.graylog2.plugin.Plugin;
+import org.graylog2.plugin.PluginMetaData;
 import org.graylog2.plugin.PluginModule;
 
 /**
@@ -10,7 +12,12 @@ import org.graylog2.plugin.PluginModule;
  */
 public class SensuClientOutputPlugin implements Plugin {
     @Override
+    public PluginMetaData metadata() {
+        return new SensuClientOutputMetadata();
+    }
+
+    @Override
     public Collection<PluginModule> modules () {
-        return Lists.newArrayList((PluginModule) new SensuClientOutputModule());
+        return Arrays.<PluginModule>asList(new SensuClientOutputModule());
     }
 }

@@ -1,10 +1,13 @@
 package org.kurdyukov.sensu;
 
 import org.graylog2.plugin.PluginMetaData;
+import org.graylog2.plugin.ServerStatus;
 import org.graylog2.plugin.Version;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Collections;
+import java.util.Set;
 
 /**
  * Plugin metadata
@@ -46,6 +49,11 @@ public class SensuClientOutputMetadata implements PluginMetaData {
 
     @Override
     public Version getRequiredVersion() {
-        return new Version(0, 90, 0);
+        return new Version(1, 0, 0);
+    }
+
+    @Override
+    public Set<ServerStatus.Capability> getRequiredCapabilities() {
+        return Collections.emptySet();
     }
 }

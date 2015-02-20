@@ -8,8 +8,6 @@ import org.graylog2.plugin.PluginModule;
 public class SensuClientOutputModule extends PluginModule {
     @Override
     protected void configure() {
-        registerPlugin(SensuClientOutputMetadata.class);
-
         addMessageOutput(SensuClientOutput.class);
     }
 }
