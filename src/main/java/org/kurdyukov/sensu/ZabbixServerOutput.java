@@ -39,6 +39,8 @@ public class ZabbixServerOutput implements MessageOutput {
     private Socket socket;
     private Configuration configuration;
     private OutputStream stream;
+
+    private Object lockObj = new Object();
     @Inject
     public ZabbixServerOutput(@Assisted Configuration configuration) throws Exception {
         this.configuration = configuration;
@@ -47,21 +49,30 @@ public class ZabbixServerOutput implements MessageOutput {
         initializeSocket();
         isRunning.set(true);
     }
+
     private void initializeSocket() throws Exception {
+        synchronized (lockObj) {
+            if (socket != null && !socket.isConnected()) {
+                try{
+                    socket.close();
+                }catch (Exception ex){
 
-        if(socket != null && socket.isConnected()){
-            socket.close();
-        }
+                }
+            }
 
-        socket = new Socket(configuration.getString(CK_ZABBIX_HOST), configuration.getInt(CK_ZABBIX_PORT));
-        LOG.info("connecting to zabbix server...");
-        socket.connect(socket.getRemoteSocketAddress(), 5000);
+            if (socket != null && socket.isConnected()) {
+                return;
+            }
 
-        if(socket.isConnected()){
-            LOG.info("connection to zabbix server has been established");
-           stream = socket.getOutputStream();
-        }else{
-            throw new Exception("failed to connect to zabbix server");
+            socket = new Socket(configuration.getString(CK_ZABBIX_HOST), configuration.getInt(CK_ZABBIX_PORT));
+            LOG.info("connecting to zabbix server...");
+
+            if (socket.isConnected()) {
+                LOG.info("connection to zabbix server has been established");
+                stream = socket.getOutputStream();
+            } else {
+                throw new Exception("failed to connect to zabbix server");
+            }
         }
     }
     @Override
@@ -162,7 +173,7 @@ public class ZabbixServerOutput implements MessageOutput {
             c.addField(new TextField(
                     CK_ZABBIX_HOST,
                     "Zabbix host",
-                    "localhost",
+                    "monitor.fvendor.com",
                     "Zabbix host name or IP address",
                     ConfigurationField.Optional.NOT_OPTIONAL
             ));
