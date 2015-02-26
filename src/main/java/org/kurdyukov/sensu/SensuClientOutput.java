@@ -23,8 +23,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * This is the plugin. Your class should implement one of the existing plugin
- * interfaces. (i.e. AlarmCallback, MessageInput, MessageOutput)
+ * Sends message to Sensu local agent
  */
 public class SensuClientOutput implements MessageOutput {
     private static final Logger LOG = LoggerFactory.getLogger(SensuClientOutput.class);
@@ -102,7 +101,7 @@ public class SensuClientOutput implements MessageOutput {
 
     @Override
     public void write(List<Message> messages) throws Exception {
-        for (Message msg: messages) {
+        for (Message msg : messages) {
             write(msg);
         }
     }
@@ -144,4 +143,5 @@ public class SensuClientOutput implements MessageOutput {
 
             return c;
         }
-    }}
+    }
+}
