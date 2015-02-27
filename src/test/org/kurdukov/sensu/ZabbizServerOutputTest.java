@@ -45,9 +45,8 @@ public class ZabbizServerOutputTest  {
         keyValueMap.put("exception","test");
         keyValueMap.put("_id", "id");
         mess.add(new Message(keyValueMap));
-        
-        plugin.write(new ArrayList<Message>());
-        plugin.write(new ArrayList<Message>());
+
+        plugin.write(new ArrayList<>(mess));
     }
 
     @After

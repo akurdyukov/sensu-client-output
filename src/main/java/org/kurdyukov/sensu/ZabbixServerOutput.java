@@ -14,10 +14,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
+import java.io.Console;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,17 +32,18 @@ public class ZabbixServerOutput implements MessageOutput {
     private static final Logger LOG = LoggerFactory.getLogger(ZabbixServerOutput.class);
 
     private final static String CK_ZABBIX_HOST = "zabbix_host";
+    private final static String CK_REPORTER_HOST = "reporter_host";
     private final static String CK_ZABBIX_PORT = "zabbix_port";
     private final static String CK_KEY_PATTERN = "zabbix_key_pattern";
     private final static String CK_VALUE_PATTERN = "zabbix_value_pattern";
-    private final static String REQUEST_FIELD_VALUE = "ZBXD\\x01";
-    private final static String ZABBIX_HEADER = "sender data";
+    private final static String REQUEST_FIELD_VALUE = "sender data";
+    private final static String ZABBIX_HEADER ="ZBXD\1";
 
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private Socket socket;
     private Configuration configuration;
-    private OutputStream stream;
-
+    private OutputStream outputStream;
+    private InputStream inputStream;
     private Object lockObj = new Object();
     @Inject
     public ZabbixServerOutput(@Assisted Configuration configuration) throws Exception {
@@ -69,7 +73,8 @@ public class ZabbixServerOutput implements MessageOutput {
 
             if (socket.isConnected()) {
                 LOG.info("connection to zabbix server has been established");
-                stream = socket.getOutputStream();
+                outputStream = socket.getOutputStream();
+                inputStream = socket.getInputStream();
             } else {
                 throw new Exception("failed to connect to zabbix server");
             }
@@ -95,7 +100,7 @@ public class ZabbixServerOutput implements MessageOutput {
     public void write(Message message) throws Exception {
 
         JSONObject jsonData = new JSONObject();
-        jsonData.put("host",configuration.getString(CK_ZABBIX_HOST));
+        jsonData.put("host",configuration.getString(CK_REPORTER_HOST));
 
 
         String keyString = GetFormattedResult(message, configuration.getString(CK_KEY_PATTERN));
@@ -106,31 +111,59 @@ public class ZabbixServerOutput implements MessageOutput {
 
         JSONObject json = new JSONObject();
         json.put("request", REQUEST_FIELD_VALUE);
-        json.put("data", Arrays.asList(jsonData.toString()));
+        json.put("data", Arrays.asList(jsonData));
 
-        byte[] data = json.toString().getBytes();
-        byte[] header = REQUEST_FIELD_VALUE.getBytes();
+        String str = json.toString().replaceAll("\\\\", "");
 
-        ByteBuffer buffer = ByteBuffer.allocate(header.length + 4 + data.length);
+        byte[] data = str.getBytes();
+        byte[] header = ZABBIX_HEADER.getBytes();
+
+        ByteBuffer buffer = ByteBuffer.allocate(header.length + 8 + data.length);
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
 
         int currentOffset = 0;
-
         buffer.put(header, 0, header.length);
         currentOffset += header.length;
 
         buffer.putInt(currentOffset, data.length);
-        currentOffset += 4;
+        currentOffset += 8;
 
-        buffer.put(data, currentOffset, data.length);
+        buffer.position(currentOffset);
+        buffer.put(data, 0, data.length);
 
-        stream.write(buffer.array());
+        outputStream.write(buffer.array());
+        String response = new String();
+        while (true){
+            byte[] buff = new byte[1024];
+            try {
+                int i = inputStream.read(buff);
+
+                if(i == -1){
+                    break;
+                }
+
+                String dataPart = new String(buff, 0, i, "UTF-8");
+                if(dataPart.length()<8){
+                    continue;
+                }
+
+                response = dataPart.substring(8);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        if(!response.contains("processed: 1") || response.contains("failed: 1")){
+            LOG.error(response);
+        }
     }
 
     private String GetFormattedResult(Message message, String pattern) {
         String result = new String(pattern);
 
         for (String fieldName : message.getFieldNames()){
-            result = result.replace(String.format("%({0})", fieldName), message.getField(fieldName).toString());
+            String replacement = message.getField(fieldName).toString();
+            String whatToReplace = String.format("%%(%s)", fieldName);
+            result = result.replace(whatToReplace, replacement);
         }
 
         return result;
@@ -198,6 +231,14 @@ public class ZabbixServerOutput implements MessageOutput {
                     "Trapper value pattern",
                     "%(message).%(exception)",
                     "Trapper value pattern",
+                    ConfigurationField.Optional.NOT_OPTIONAL
+            ));
+
+            c.addField(new TextField(
+                    CK_REPORTER_HOST,
+                    "Reporter server host",
+                    "prod8.charlie.fvendor.com",
+                    "reporter host name or IP address",
                     ConfigurationField.Optional.NOT_OPTIONAL
             ));
 
