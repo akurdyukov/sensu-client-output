@@ -8,13 +8,13 @@ import org.graylog2.plugin.configuration.fields.ConfigurationField;
 import org.graylog2.plugin.configuration.fields.NumberField;
 import org.graylog2.plugin.configuration.fields.TextField;
 import org.graylog2.plugin.outputs.MessageOutput;
+import org.graylog2.plugin.outputs.MessageOutputConfigurationException;
 import org.graylog2.plugin.streams.Stream;
 import org.json.simple.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
-import java.io.Console;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -37,56 +37,22 @@ public class ZabbixServerOutput implements MessageOutput {
     private final static String CK_KEY_PATTERN = "zabbix_key_pattern";
     private final static String CK_VALUE_PATTERN = "zabbix_value_pattern";
     private final static String REQUEST_FIELD_VALUE = "sender data";
-    private final static String ZABBIX_HEADER ="ZBXD\1";
+    private final static String ZABBIX_HEADER = "ZBXD\1";
 
+    private final static int LONG_NUMBER_BYTE_LENGTH = 8;
+    private final static int NON_DATA_PART_OF_MESSAGE = ZABBIX_HEADER.length() + LONG_NUMBER_BYTE_LENGTH;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
-    private Socket socket;
     private Configuration configuration;
-    private OutputStream outputStream;
-    private InputStream inputStream;
-    private Object lockObj = new Object();
+
     @Inject
-    public ZabbixServerOutput(@Assisted Configuration configuration) throws Exception {
+    public ZabbixServerOutput(@Assisted Configuration configuration) throws MessageOutputConfigurationException {
         this.configuration = configuration;
         LOG.info("Initializing");
-
-        initializeSocket();
         isRunning.set(true);
     }
 
-    private void initializeSocket() throws Exception {
-        synchronized (lockObj) {
-            if (socket != null && !socket.isConnected()) {
-                try{
-                    socket.close();
-                }catch (Exception ex){
-
-                }
-            }
-
-            if (socket != null && socket.isConnected()) {
-                return;
-            }
-
-            socket = new Socket(configuration.getString(CK_ZABBIX_HOST), configuration.getInt(CK_ZABBIX_PORT));
-            LOG.info("connecting to zabbix server...");
-
-            if (socket.isConnected()) {
-                LOG.info("connection to zabbix server has been established");
-                outputStream = socket.getOutputStream();
-                inputStream = socket.getInputStream();
-            } else {
-                throw new Exception("failed to connect to zabbix server");
-            }
-        }
-    }
     @Override
     public void stop() {
-        try {
-            socket.close();
-        } catch (IOException e) {
-            LOG.error("Problems stopping socket", e);
-        }
         isRunning.set(false);
         LOG.info("Stopped");
     }
@@ -99,12 +65,58 @@ public class ZabbixServerOutput implements MessageOutput {
     @Override
     public void write(Message message) throws Exception {
 
+        LOG.info("connecting to zabbix server...");
+        Socket socket = new Socket(configuration.getString(CK_ZABBIX_HOST), configuration.getInt(CK_ZABBIX_PORT));
+
+        if (!socket.isConnected()) {
+            throw new Exception("failed to connect to zabbix server");
+        }
+        LOG.info("connection to zabbix server has been established");
+
+        buildMessageAndSend(message, socket);
+        readAndHandleResponse(socket);
+    }
+
+    private void buildMessageAndSend(Message message, Socket socket) throws IOException {
+        String str = buildMessage(message);
+        ByteBuffer buffer = getMessageByteBuffer(str);
+
+        OutputStream outputStream = socket.getOutputStream();
+        outputStream.write(buffer.array());
+    }
+
+    private void readAndHandleResponse(Socket socket) throws IOException {
+        String response = new String();
+        InputStream inputStream = socket.getInputStream();
+        while (isRunning()) {
+            byte[] buff = new byte[1024];
+            int i = inputStream.read(buff);
+
+            if (i == -1) {
+                break;
+            }
+
+            String dataPart = new String(buff, 0, i, "UTF-8");
+
+            response += dataPart;
+        }
+
+        if (response.length() <= NON_DATA_PART_OF_MESSAGE) {
+            LOG.error("got strange response from server " + response);
+            return;
+        }
+        response = response.substring(NON_DATA_PART_OF_MESSAGE);
+        if (!response.contains("processed: 1") || response.contains("failed: 1")) {
+            LOG.error(response);
+        }
+    }
+
+    private String buildMessage(Message message) {
         JSONObject jsonData = new JSONObject();
-        jsonData.put("host",configuration.getString(CK_REPORTER_HOST));
+        jsonData.put("host", configuration.getString(CK_REPORTER_HOST));
 
-
-        String keyString = GetFormattedResult(message, configuration.getString(CK_KEY_PATTERN));
-        String valueString = GetFormattedResult(message, configuration.getString(CK_VALUE_PATTERN));
+        String keyString = getFormattedResult(message, configuration.getString(CK_KEY_PATTERN));
+        String valueString = getFormattedResult(message, configuration.getString(CK_VALUE_PATTERN));
 
         jsonData.put("key", keyString);
         jsonData.put("value", valueString);
@@ -113,12 +125,14 @@ public class ZabbixServerOutput implements MessageOutput {
         json.put("request", REQUEST_FIELD_VALUE);
         json.put("data", Arrays.asList(jsonData));
 
-        String str = json.toString().replaceAll("\\\\", "");
+        return json.toString().replaceAll("\\\\", "");
+    }
 
+    private ByteBuffer getMessageByteBuffer(String str) {
         byte[] data = str.getBytes();
         byte[] header = ZABBIX_HEADER.getBytes();
 
-        ByteBuffer buffer = ByteBuffer.allocate(header.length + 8 + data.length);
+        ByteBuffer buffer = ByteBuffer.allocate(header.length + LONG_NUMBER_BYTE_LENGTH + data.length);
         buffer.order(ByteOrder.LITTLE_ENDIAN);
 
         int currentOffset = 0;
@@ -126,41 +140,17 @@ public class ZabbixServerOutput implements MessageOutput {
         currentOffset += header.length;
 
         buffer.putInt(currentOffset, data.length);
-        currentOffset += 8;
+        currentOffset += LONG_NUMBER_BYTE_LENGTH;
 
         buffer.position(currentOffset);
         buffer.put(data, 0, data.length);
-
-        outputStream.write(buffer.array());
-        String response = new String();
-        while (true){
-            byte[] buff = new byte[1024];
-            try {
-                int i = inputStream.read(buff);
-
-                if(i == -1){
-                    break;
-                }
-
-                String dataPart = new String(buff, 0, i, "UTF-8");
-                if(dataPart.length()<8){
-                    continue;
-                }
-
-                response = dataPart.substring(8);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        if(!response.contains("processed: 1") || response.contains("failed: 1")){
-            LOG.error(response);
-        }
+        return buffer;
     }
 
-    private String GetFormattedResult(Message message, String pattern) {
+    private String getFormattedResult(Message message, String pattern) {
         String result = new String(pattern);
 
-        for (String fieldName : message.getFieldNames()){
+        for (String fieldName : message.getFieldNames()) {
             String replacement = message.getField(fieldName).toString();
             String whatToReplace = String.format("%%(%s)", fieldName);
             result = result.replace(whatToReplace, replacement);
@@ -171,11 +161,6 @@ public class ZabbixServerOutput implements MessageOutput {
 
     @Override
     public void write(List<Message> messages) throws Exception {
-
-        if(socket == null || !socket.isConnected()){
-            initializeSocket();
-        }
-
         for (Message msg : messages) {
             write(msg);
         }
@@ -206,7 +191,7 @@ public class ZabbixServerOutput implements MessageOutput {
             c.addField(new TextField(
                     CK_ZABBIX_HOST,
                     "Zabbix host",
-                    "monitor.fvendor.com",
+                    "localhost",
                     "Zabbix host name or IP address",
                     ConfigurationField.Optional.NOT_OPTIONAL
             ));
@@ -237,7 +222,7 @@ public class ZabbixServerOutput implements MessageOutput {
             c.addField(new TextField(
                     CK_REPORTER_HOST,
                     "Reporter server host",
-                    "prod8.charlie.fvendor.com",
+                    "localhost",
                     "reporter host name or IP address",
                     ConfigurationField.Optional.NOT_OPTIONAL
             ));
