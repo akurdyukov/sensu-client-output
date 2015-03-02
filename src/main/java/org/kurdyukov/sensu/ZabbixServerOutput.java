@@ -75,6 +75,12 @@ public class ZabbixServerOutput implements MessageOutput {
 
         buildMessageAndSend(message, socket);
         readAndHandleResponse(socket);
+
+        try{
+            socket.close();
+        }catch (Exception ex){
+
+        }
     }
 
     private void buildMessageAndSend(Message message, Socket socket) throws IOException {
