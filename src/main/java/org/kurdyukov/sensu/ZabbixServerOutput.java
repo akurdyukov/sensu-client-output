@@ -131,7 +131,7 @@ public class ZabbixServerOutput implements MessageOutput {
         json.put("request", REQUEST_FIELD_VALUE);
         json.put("data", Arrays.asList(jsonData));
 
-        return json.toString().replaceAll("\\\\", "");
+        return json.toString();
     }
 
     private ByteBuffer getMessageByteBuffer(String str) {
